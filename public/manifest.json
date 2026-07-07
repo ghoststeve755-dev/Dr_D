@@ -1,0 +1,17 @@
+{
+  "name": "Doctor D — Doctor of Discipline",
+  "short_name": "Doctor D",
+  "description": "Your Personal Life Operating System to track habits, journal, and grow.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0f19",
+  "theme_color": "#4f46e5",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    }
+  ]
+}
