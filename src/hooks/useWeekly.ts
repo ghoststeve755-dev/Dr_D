@@ -4,8 +4,7 @@
 
 import { useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
-import { WeeklyReview, Habit, DailyJournal } from '@/types';
-import { getDatesInISOWeek } from '@/lib/dates';
+import { WeeklyReview, Habit } from '@/types';
 
 export function useWeekly() {
   const [loading, setLoading] = useState(false);
@@ -143,11 +142,49 @@ export function useWeekly() {
     }
   };
 
+  const autoGenerateWeeklyReview = useCallback(async (week: number, year: number, activeHabits: Habit[]) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const stats = await aggregateWeeklyStats(week, year, activeHabits);
+      if (!stats) return;
+
+      // Check for existing review to preserve text fields
+      const { data: existingReview } = await supabase
+        .from('weekly_reviews')
+        .select('achievement, challenge, learning, next_focus, notes')
+        .eq('user_id', user.id)
+        .eq('year', year)
+        .eq('week_number', week)
+        .maybeSingle();
+
+      const reviewData = {
+        year,
+        week_number: week,
+        weekly_raw_score: stats.weeklyRawScore,
+        weekly_max_score: stats.weeklyMaxScore,
+        weekly_pct_score: stats.weeklyPctScore,
+        habit_summary: stats.habitSummary,
+        achievement: existingReview?.achievement || null,
+        challenge: existingReview?.challenge || null,
+        learning: existingReview?.learning || null,
+        next_focus: existingReview?.next_focus || null,
+        notes: existingReview?.notes || null,
+      };
+
+      await submitWeeklyReview(reviewData);
+    } catch (err: any) {
+      console.error('Error auto-generating weekly review:', err);
+    }
+  }, [aggregateWeeklyStats]);
+
   return {
     loading,
     error,
     fetchWeeklyReviews,
     aggregateWeeklyStats,
-    submitWeeklyReview
+    submitWeeklyReview,
+    autoGenerateWeeklyReview
   };
 }

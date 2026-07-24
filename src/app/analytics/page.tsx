@@ -10,151 +10,20 @@ import {
 } from 'recharts';
 import { BarChart3, TrendingUp, DollarSign, Award, Flame } from 'lucide-react';
 
+import { useAnalytics } from '@/hooks/useAnalytics';
+
 export default function AnalyticsPage() {
   const { habits, loading: habitsLoading } = useHabits();
-  const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<'7d' | '30d' | '90d' | 'all'>('30d');
   
-  const [journals, setJournals] = useState<any[]>([]);
-  const [habitLogs, setHabitLogs] = useState<any[]>([]);
-  const [analyticsData, setAnalyticsData] = useState<any[]>([]);
-  const [financialData, setFinancialData] = useState<any[]>([]);
-  const [completionData, setCompletionData] = useState<any[]>([]);
-  const [heatmapData, setHeatmapData] = useState<{ [date: string]: number }>({});
-
-  useEffect(() => {
-    async function fetchAnalytics() {
-      setLoading(true);
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
-
-        // Fetch all journals sorted ascending
-        const { data: journalList } = await supabase
-          .from('daily_journals')
-          .select('*, habit_logs(*)')
-          .eq('user_id', user.id)
-          .order('date', { ascending: true });
-
-        if (journalList) {
-          setJournals(journalList);
-
-          // Populate heatmap map
-          const heatmap: { [date: string]: number } = {};
-          journalList.forEach(j => {
-            heatmap[j.date] = parseFloat(j.daily_pct_score?.toString() || '0');
-          });
-          setHeatmapData(heatmap);
-        }
-      } catch (err) {
-        console.error('Error fetching analytics data:', err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    fetchAnalytics();
-  }, []);
-
-  // Recalculate metrics on filter or journals change
-  useEffect(() => {
-    if (journals.length === 0) return;
-
-    const today = new Date();
-    let cutoffDate = new Date();
-    
-    if (filter === '7d') cutoffDate.setDate(today.getDate() - 7);
-    else if (filter === '30d') cutoffDate.setDate(today.getDate() - 30);
-    else if (filter === '90d') cutoffDate.setDate(today.getDate() - 90);
-    else cutoffDate = new Date(0); // All time
-
-    // Filter journals
-    const filteredJournals = journals.filter(j => new Date(j.date) >= cutoffDate);
-
-    // 1. Overall Score Trend Data
-    const scoreTrend = filteredJournals.map(j => {
-      const dataPoint: any = {
-        date: j.date.substring(5), // MM-DD
-        score: parseFloat(j.daily_pct_score?.toString() || '0')
-      };
-      
-      // Add individual numeric habit values for correlations
-      j.habit_logs?.forEach((log: any) => {
-        const habit = habits.find(h => h.id === log.habit_id);
-        if (habit && habit.input_type === 'number') {
-          dataPoint[habit.name] = parseFloat(log.raw_value) || 0;
-        }
-      });
-      return dataPoint;
-    });
-    setAnalyticsData(scoreTrend);
-
-    // 2. Financial Data (Earned vs Spent)
-    const finances = filteredJournals.map(j => {
-      let earned = 0;
-      let spent = 0;
-      
-      j.habit_logs?.forEach((log: any) => {
-        const habit = habits.find(h => h.id === log.habit_id);
-        if (habit) {
-          if (habit.name.includes('Money Earned')) {
-            earned = parseFloat(log.raw_value) || 0;
-          } else if (habit.name.includes('Money Spent')) {
-            spent = parseFloat(log.raw_value) || 0;
-          }
-        }
-      });
-
-      return {
-        date: j.date.substring(5),
-        Earned: earned,
-        Spent: spent
-      };
-    });
-    setFinancialData(finances);
-
-    // 3. Habit Completion Rates (Boolean completion %)
-    const counts: { [id: string]: { name: string; completed: number; total: number } } = {};
-    
-    habits.forEach(h => {
-      counts[h.id] = { name: h.name, completed: 0, total: 0 };
-    });
-
-    filteredJournals.forEach(j => {
-      j.habit_logs?.forEach((log: any) => {
-        if (counts[log.habit_id]) {
-          counts[log.habit_id].total += 1;
-          const habit = habits.find(h => h.id === log.habit_id);
-          if (habit) {
-            if (habit.input_type === 'boolean') {
-              if (log.raw_value === '1' || log.raw_value === 'true') {
-                counts[log.habit_id].completed += 1;
-              }
-            } else {
-              // Numeric habit is "completed" if it earned positive score
-              if (parseFloat(log.computed_score) > 0) {
-                counts[log.habit_id].completed += 1;
-              }
-            }
-          }
-        }
-      });
-    });
-
-    const completionRateList = Object.values(counts)
-      .filter(c => c.total > 0)
-      .map(c => {
-        const habit = habits.find(h => h.name === c.name);
-        return {
-          name: c.name,
-          Rate: Math.round((c.completed / c.total) * 100),
-          category: habit?.category || 'productivity',
-          total: c.total,
-          completed: c.completed
-        };
-      });
-    setCompletionData(completionRateList);
-
-  }, [journals, filter, habits]);
+  const {
+    loading,
+    filter,
+    setFilter,
+    analyticsData,
+    financialData,
+    completionData,
+    heatmapData
+  } = useAnalytics(habits, habitsLoading);
 
   // Render Calendar Heatmap (Last 90 days grid)
   const renderHeatmap = () => {
@@ -189,29 +58,9 @@ export default function AnalyticsPage() {
 
   if (loading || habitsLoading) {
     return (
-      <div className="analytics-loading">
+      <div className="page-loading-container">
         <div className="spinner"></div>
         <p>Analyzing discipline trends...</p>
-        <style jsx>{`
-          .analytics-loading {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            padding: 80px;
-            color: var(--text-secondary);
-            gap: 12px;
-          }
-          .spinner {
-            width: 32px;
-            height: 32px;
-            border: 3px solid var(--border);
-            border-top: 3px solid var(--primary);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-          }
-          @keyframes spin { to { transform: rotate(360deg); } }
-        `}</style>
       </div>
     );
   }
@@ -282,34 +131,34 @@ export default function AnalyticsPage() {
           </div>
         </div>
 
-        {/* Chart 2: Financial Trend */}
-        <div className="analytics-card card-glass chart-card">
-          <h4>Money Earned vs Money Spent</h4>
-          <div className="chart-scroll-wrapper">
-            <div className="chart-inner">
-              <ResponsiveContainer width="100%" height={240}>
-                <BarChart data={financialData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                  <XAxis dataKey="date" stroke="var(--text-secondary)" fontSize={11} />
-                  <YAxis stroke="var(--text-secondary)" fontSize={11} />
-                  <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: 'var(--bg-elevated)', 
-                      borderColor: 'var(--border)',
-                      borderRadius: '8px',
-                      boxShadow: 'var(--shadow-md)'
-                    }}
-                    itemStyle={{ color: 'var(--text-primary)' }}
-                    labelStyle={{ color: 'var(--text-secondary)', fontWeight: 600 }}
-                  />
-                  <Legend />
-                  <Bar dataKey="Earned" fill="var(--success)" radius={[4, 4, 0, 0]} maxBarSize={28} />
-                  <Bar dataKey="Spent" fill="var(--danger)" radius={[4, 4, 0, 0]} maxBarSize={28} />
-                </BarChart>
-              </ResponsiveContainer>
+        {/* Dynamic Numeric Habit Trends */}
+        {financialData.map((trend: any) => (
+          <div key={trend.name} className="analytics-card card-glass chart-card">
+            <h4>{trend.name} Trend</h4>
+            <div className="chart-scroll-wrapper">
+              <div className="chart-inner">
+                <ResponsiveContainer width="100%" height={240}>
+                  <BarChart data={trend.data}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                    <XAxis dataKey="date" stroke="var(--text-secondary)" fontSize={11} />
+                    <YAxis stroke="var(--text-secondary)" fontSize={11} />
+                    <Tooltip 
+                      contentStyle={{ 
+                        backgroundColor: 'var(--bg-elevated)', 
+                        borderColor: 'var(--border)',
+                        borderRadius: '8px',
+                        boxShadow: 'var(--shadow-md)'
+                      }}
+                      itemStyle={{ color: 'var(--text-primary)' }}
+                      labelStyle={{ color: 'var(--text-secondary)', fontWeight: 600 }}
+                    />
+                    <Bar dataKey="Value" fill="var(--primary)" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
             </div>
           </div>
-        </div>
+        ))}
 
         {/* Chart 3: Habit Completion Rates — Circular Progress Cards */}
         <div className="analytics-card card-glass chart-card span-2">

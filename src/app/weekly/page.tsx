@@ -7,7 +7,8 @@ import { useWeekly } from '@/hooks/useWeekly';
 import WeeklyForm from '@/components/weekly/WeeklyForm';
 import { WeeklyReview } from '@/types';
 import { getISOWeekAndYear } from '@/lib/dates';
-import { Calendar, Plus, CheckCircle, ChevronDown, ChevronUp, AlertCircle, FileSpreadsheet } from 'lucide-react';
+import { Calendar, Plus, CheckCircle, ChevronDown, ChevronUp, AlertCircle, FileSpreadsheet, Activity } from 'lucide-react';
+import { generateDetailedComparison, generateReadableSummaryText } from '@/lib/summaryGenerator';
 
 export default function WeeklyReviewsPage() {
   const { fetchWeeklyReviews, loading, error } = useWeekly();
@@ -54,7 +55,7 @@ export default function WeeklyReviewsPage() {
       <div className="page-header">
         <div className="header-info">
           <h3>Weekly Reflections & Reviews</h3>
-          <p>Review your weekly performance, aggregate study hours, financial earnings, and write reflections.</p>
+          <p>Weekly stats are automatically generated every Sunday based on your daily journals. Edit them here to add your personal reflections.</p>
         </div>
 
         <div className="header-actions">
@@ -94,8 +95,8 @@ export default function WeeklyReviewsPage() {
         ) : reviews.length === 0 ? (
           <div className="empty-reviews card-glass">
             <Calendar size={36} className="empty-icon" />
-            <h4>No Weekly Reviews submitted yet</h4>
-            <p>Select a week above and click &quot;Review Week&quot; to log your first weekly reflection.</p>
+            <h4>No Weekly Reviews generated yet</h4>
+            <p>Reviews will appear here automatically when you complete a Sunday journal, or you can manually create one above.</p>
           </div>
         ) : (
           reviews.map((review) => {
@@ -110,6 +111,18 @@ export default function WeeklyReviewsPage() {
               else if (info.name.includes('Money Spent')) spent = info.totalValue;
             });
             const savings = earned - spent;
+
+            let prevYear = review.year;
+            let prevWeek = review.week_number - 1;
+            if (prevWeek === 0) {
+              prevYear -= 1;
+              prevWeek = 53; // Assuming max 53 weeks
+            }
+            const prevReview = reviews.find(r => r.year === prevYear && r.week_number === prevWeek);
+            const prevSummary = prevReview?.habit_summary || null;
+            
+            const comparisons = generateDetailedComparison(summary, prevSummary);
+            const summaryText = generateReadableSummaryText('week', review.weekly_pct_score, prevReview ? prevReview.weekly_pct_score : null, comparisons);
 
             return (
               <div key={review.id} className={`review-accordion-card card-glass ${isExpanded ? 'expanded' : ''}`}>
@@ -138,7 +151,12 @@ export default function WeeklyReviewsPage() {
 
                 {isExpanded && (
                   <div className="accordion-content animate-fade-in">
-                    <div className="content-grid">
+                    <div className="auto-summary-box">
+                      <h5><Activity size={16} /> Automated Weekly Summary</h5>
+                      <p>{summaryText}</p>
+                    </div>
+
+                    <div className="content-grid" style={{ marginTop: '20px' }}>
                       {/* Left: Reflection Notes */}
                       <div className="reflection-details">
                         <div className="ref-item">
@@ -165,18 +183,44 @@ export default function WeeklyReviewsPage() {
                         )}
                       </div>
 
-                      {/* Right: Habit Totals */}
+                      {/* Right: Detailed Comparison */}
                       <div className="habit-totals-details">
-                        <h5>📊 Habit Summary</h5>
-                        <div className="totals-list" style={{ marginBottom: '16px' }}>
-                          {Object.entries(summary).map(([id, info]: any) => (
-                            <div key={id} className="total-row">
-                              <span className="lbl">{info.name}</span>
-                              <span className="val">
-                                {info.inputType === 'boolean' ? `${info.totalValue} days` : `${info.totalValue.toFixed(0)} ${info.unit}`}
-                              </span>
-                            </div>
-                          ))}
+                        <h5>📊 Detailed Performance</h5>
+                        <div className="comparison-table-wrapper" style={{ marginBottom: '16px', overflowX: 'auto' }}>
+                          <table className="comparison-table">
+                            <thead>
+                              <tr>
+                                <th>Metric</th>
+                                <th>Current</th>
+                                <th>Previous</th>
+                                <th>Diff</th>
+                                <th>Status</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {comparisons.map((comp) => {
+                                const valStr = comp.inputType === 'boolean' ? ' days' : (comp.unit ? ` ${comp.unit}` : '');
+                                const isPositive = comp.difference > 0;
+                                const diffStr = comp.difference === 0 ? '-' : `${isPositive ? '+' : ''}${comp.difference}${valStr}`;
+                                const statusClass = comp.status === 'Improved' ? 'success' : comp.status === 'Declined' ? 'danger' : 'neutral';
+                                
+                                return (
+                                  <tr key={comp.habitId}>
+                                    <td className="metric-name">{comp.name}</td>
+                                    <td>{comp.currentValue}{valStr}</td>
+                                    <td>{prevSummary ? `${comp.prevValue}${valStr}` : '—'}</td>
+                                    <td className={statusClass}>{prevSummary ? diffStr : '—'}</td>
+                                    <td>
+                                      {prevSummary && comp.status !== 'No Change' && (
+                                        <span className={`status-badge ${statusClass}`}>{comp.status}</span>
+                                      )}
+                                      {!prevSummary && '—'}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
                         </div>
                         <button 
                           onClick={() => window.print()} 
@@ -342,6 +386,83 @@ export default function WeeklyReviewsPage() {
         .empty-reviews p {
           font-size: 13px;
           color: var(--text-secondary);
+        }
+
+        .auto-summary-box {
+          background-color: var(--primary-light);
+          border: 1px solid rgba(99, 102, 241, 0.2);
+          border-radius: var(--radius-md);
+          padding: 16px;
+          margin-bottom: 24px;
+        }
+
+        .auto-summary-box h5 {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          color: var(--primary);
+          font-size: 14px;
+          font-weight: 700;
+          margin-bottom: 8px;
+          font-family: 'Outfit', sans-serif;
+        }
+
+        .auto-summary-box p {
+          font-size: 14px;
+          color: var(--text-primary);
+          line-height: 1.5;
+        }
+
+        .comparison-table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 13px;
+        }
+
+        .comparison-table th {
+          text-align: left;
+          padding: 8px 12px;
+          border-bottom: 1px solid var(--border);
+          color: var(--text-secondary);
+          font-weight: 600;
+        }
+
+        .comparison-table td {
+          padding: 10px 12px;
+          border-bottom: 1px solid var(--border);
+          color: var(--text-primary);
+        }
+
+        .comparison-table .metric-name {
+          font-weight: 600;
+        }
+
+        .comparison-table .success {
+          color: var(--success);
+          font-weight: 600;
+        }
+
+        .comparison-table .danger {
+          color: var(--danger);
+          font-weight: 600;
+        }
+
+        .status-badge {
+          display: inline-block;
+          padding: 4px 8px;
+          border-radius: var(--radius-sm);
+          font-size: 11px;
+          font-weight: 700;
+        }
+
+        .status-badge.success {
+          background-color: var(--success-light);
+          color: var(--success);
+        }
+
+        .status-badge.danger {
+          background-color: var(--danger-light);
+          color: var(--danger);
         }
 
         .review-accordion-card {

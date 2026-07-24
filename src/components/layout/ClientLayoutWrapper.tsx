@@ -70,39 +70,61 @@ export default function ClientLayoutWrapper({
     };
   }, [pathname, isAuthPage, router]);
 
-  // Option A: Local Notification Polling
+  // Ref for holding notification settings without triggering re-renders
+  const [notifSettings, setNotifSettings] = useState<any>(null);
+
   useEffect(() => {
-    if (!session || typeof window === 'undefined' || !('Notification' in window) || Notification.permission !== 'granted') return;
+    if (session?.user?.id) {
+      supabase.from('notification_settings').select('*').eq('user_id', session.user.id).maybeSingle()
+        .then(({ data }) => setNotifSettings(data))
+        .catch(() => {});
+    }
+  }, [session]);
+
+  // Local Notification Timer (No DB polling)
+  useEffect(() => {
+    if (!notifSettings || typeof window === 'undefined' || !('Notification' in window) || Notification.permission !== 'granted') return;
 
     let lastNotifiedDate = '';
     
-    const checkReminders = async () => {
-      try {
-        const { data: notifSettings } = await supabase.from('notification_settings').select('*').eq('user_id', session.user.id).maybeSingle();
-        if (!notifSettings || !notifSettings.daily_reminder) return;
+    const checkReminders = () => {
+      const now = new Date();
+      const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+      const targetTime = notifSettings.daily_time ? notifSettings.daily_time.substring(0, 5) : '19:00'; // "HH:MM"
+      const todayStr = now.toDateString();
+      const dayName = now.toLocaleDateString('en-US', { weekday: 'long' });
+      const totalDaysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      const isLastDayOfMonth = now.getDate() === totalDaysInMonth;
 
-        const now = new Date();
-        const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-        const targetTime = notifSettings.daily_time ? notifSettings.daily_time.substring(0, 5) : '19:00'; // "HH:MM"
-        const todayStr = now.toDateString();
-
-        if (currentTime === targetTime && lastNotifiedDate !== todayStr) {
-          new Notification('Doctor D', {
-            body: 'Time to log your daily journal!',
-            icon: '/icon.svg'
-          });
-          lastNotifiedDate = todayStr;
+      if (currentTime === targetTime && lastNotifiedDate !== todayStr) {
+        lastNotifiedDate = todayStr;
+        
+        // 1. Daily
+        if (notifSettings.daily_reminder) {
+          new Notification('Doctor D', { body: 'Time to log your daily journal!', icon: '/icon.svg' });
         }
-      } catch (e) {}
+        
+        // 2. Weekly (Sunday)
+        if (notifSettings.weekly_reminder && dayName === 'Sunday') {
+          setTimeout(() => {
+            new Notification('Doctor D', { body: 'Time for your Weekly Review!', icon: '/icon.svg' });
+          }, 2000); // 2 second stagger
+        }
+        
+        // 3. Monthly (Last day of month)
+        if (notifSettings.monthly_reminder && isLastDayOfMonth) {
+          setTimeout(() => {
+            new Notification('Doctor D', { body: 'Time for your Monthly Report!', icon: '/icon.svg' });
+          }, 4000); // 4 second stagger
+        }
+      }
     };
 
-    const intervalId = setInterval(checkReminders, 60000); // Check every minute
-    
-    // Initial check just in case we open the app exactly on the minute
-    setTimeout(checkReminders, 5000);
+    const intervalId = setInterval(checkReminders, 60000); // Check local time every minute
+    setTimeout(checkReminders, 5000); // Initial check
 
     return () => clearInterval(intervalId);
-  }, [session]);
+  }, [notifSettings]);
 
   if (loading || (!session && !isAuthPage)) {
     return (

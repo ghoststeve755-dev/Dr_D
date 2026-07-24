@@ -4,7 +4,7 @@
 
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Settings, User, Bell, Shield, Database, CheckCircle2, CheckSquare } from 'lucide-react';
+import { Settings, User, Bell, Shield, Database, CheckCircle2, CheckSquare, Download } from 'lucide-react';
 
 export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
@@ -227,31 +227,72 @@ export default function SettingsPage() {
     }
   };
 
+  const handleExportData = async (format: 'json' | 'csv') => {
+    try {
+      setSuccessMsg('');
+      setErrorMsg('');
+      
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Not authenticated');
+
+      // Fetch all relevant data
+      const [habitsRes, journalsRes, logsRes, weeklyRes, monthlyRes] = await Promise.all([
+        supabase.from('habits').select('*').eq('user_id', user.id),
+        supabase.from('daily_journals').select('*').eq('user_id', user.id),
+        supabase.from('habit_logs').select('*').eq('user_id', user.id),
+        supabase.from('weekly_reviews').select('*').eq('user_id', user.id),
+        supabase.from('monthly_reports').select('*').eq('user_id', user.id),
+      ]);
+
+      const allData = {
+        habits: habitsRes.data || [],
+        daily_journals: journalsRes.data || [],
+        habit_logs: logsRes.data || [],
+        weekly_reviews: weeklyRes.data || [],
+        monthly_reports: monthlyRes.data || [],
+      };
+
+      let content = '';
+      let filename = `Doctor_D_Export_${new Date().toISOString().split('T')[0]}`;
+      let mimeType = '';
+
+      if (format === 'json') {
+        content = JSON.stringify(allData, null, 2);
+        filename += '.json';
+        mimeType = 'application/json';
+      } else if (format === 'csv') {
+        // Flatten into a simple CSV for journals to serve as an MVP export
+        const headers = ['Date', 'Day', 'Raw Score', 'Pct Score'];
+        const rows = allData.daily_journals.map((j: any) => [
+          j.date, j.day_of_week, j.daily_raw_score, j.daily_pct_score
+        ].join(','));
+        content = [headers.join(','), ...rows].join('\n');
+        filename += '.csv';
+        mimeType = 'text/csv';
+      }
+
+      // Trigger download
+      const blob = new Blob([content], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      
+      setSuccessMsg(`Data successfully exported as ${format.toUpperCase()}`);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to export data');
+    }
+  };
+
   if (loading) {
     return (
-      <div className="settings-loading">
+      <div className="page-loading-container">
         <div className="spinner"></div>
         <p>Loading Preferences...</p>
-        <style jsx>{`
-          .settings-loading {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            padding: 80px;
-            color: var(--text-secondary);
-            gap: 12px;
-          }
-          .spinner {
-            width: 32px;
-            height: 32px;
-            border: 3px solid var(--border);
-            border-top: 3px solid var(--primary);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-          }
-          @keyframes spin { to { transform: rotate(360deg); } }
-        `}</style>
       </div>
     );
   }
@@ -430,6 +471,25 @@ export default function SettingsPage() {
             {pwLoading ? 'Updating...' : 'Change Password'}
           </button>
         </form>
+
+        {/* Data Export */}
+        <div className="settings-card card-glass">
+          <div className="card-title">
+            <Download size={18} />
+            <h4>Data Export</h4>
+          </div>
+          <p className="settings-desc" style={{ marginBottom: '16px' }}>
+            Download a backup of all your habits, daily journals, weekly reviews, and monthly reports.
+          </p>
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <button onClick={() => handleExportData('json')} className="btn-primary">
+              Export as JSON
+            </button>
+            <button onClick={() => handleExportData('csv')} className="btn-outline">
+              Export as CSV (Journals)
+            </button>
+          </div>
+        </div>
 
         {/* Data Management */}
         <div className="settings-card card-glass danger-zone-card">

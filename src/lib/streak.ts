@@ -20,7 +20,7 @@ export function calculateStreak(dates: string[]): { current: number; longest: nu
 
   let current = 0;
   if (isStreakActive) {
-    let expected = new Date(mostRecentEntry);
+    const expected = new Date(mostRecentEntry);
     for (let i = 0; i < sortedDates.length; i++) {
       const currentEntry = new Date(sortedDates[i]);
       // Calculate day difference

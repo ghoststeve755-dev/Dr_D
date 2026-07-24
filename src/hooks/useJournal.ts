@@ -7,10 +7,15 @@ import { supabase } from '@/lib/supabase';
 import { DailyJournal, HabitLog, Habit } from '@/types';
 import { calculateDailyJournalScore } from '@/lib/scoring';
 import { getISOWeekAndYear, getDayName, getMonthAndYear } from '@/lib/dates';
+import { useWeekly } from './useWeekly';
+import { useMonthly } from './useMonthly';
 
 export function useJournal() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  const { autoGenerateWeeklyReview } = useWeekly();
+  const { autoGenerateMonthlyReport } = useMonthly();
 
   const fetchJournalEntry = useCallback(async (dateStr: string) => {
     setLoading(true);
@@ -133,6 +138,17 @@ export function useJournal() {
           .insert(logsToInsert);
 
         if (logsError) throw logsError;
+      }
+
+      // 6. Auto-generate weekly review if Sunday
+      if (dayName === 'Sunday') {
+        await autoGenerateWeeklyReview(week, year, activeHabits);
+      }
+
+      // 7. Auto-generate monthly review if last day of the month
+      const totalDaysInMonth = new Date(year, month, 0).getDate();
+      if (dateObj.getDate() === totalDaysInMonth) {
+        await autoGenerateMonthlyReport(month, year, activeHabits);
       }
 
       return journal as DailyJournal;

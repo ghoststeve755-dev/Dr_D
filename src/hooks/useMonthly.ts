@@ -53,8 +53,6 @@ export function useMonthly() {
       if (journalsError) throw journalsError;
 
       // Initialize aggregation counters
-      let totalRawScore = 0;
-      let totalMaxScore = 0;
       let moneyEarned = 0;
       let moneySpent = 0;
       const habitSummary: Record<string, { name: string; totalValue: number; totalScore: number; inputType: string; unit: string | null; logsCount: number }> = {};
@@ -144,11 +142,34 @@ export function useMonthly() {
     }
   };
 
+  const autoGenerateMonthlyReport = useCallback(async (month: number, year: number, activeHabits: Habit[]) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const stats = await aggregateMonthlyStats(month, year, activeHabits);
+      if (!stats) return;
+
+      const reportData = {
+        year,
+        month,
+        monthly_pct_score: stats.monthlyPctScore,
+        habit_summary: stats.habitSummary,
+        is_auto_generated: true
+      };
+
+      await submitMonthlyReport(reportData);
+    } catch (err: any) {
+      console.error('Error auto-generating monthly report:', err);
+    }
+  }, [aggregateMonthlyStats]);
+
   return {
     loading,
     error,
     fetchMonthlyReports,
     aggregateMonthlyStats,
-    submitMonthlyReport
+    submitMonthlyReport,
+    autoGenerateMonthlyReport
   };
 }

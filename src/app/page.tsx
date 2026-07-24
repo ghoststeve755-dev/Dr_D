@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { calculateStreak } from '@/lib/streak';
 import { getISOWeekAndYear, formatDateString, getDatesInISOWeek } from '@/lib/dates';
+import { generateDetailedComparison, generateReadableSummaryText } from '@/lib/summaryGenerator';
 import DonutChart from '@/components/ui/DonutChart';
 import { 
   Flame, 
@@ -22,178 +23,28 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 
+import { useDashboard } from '@/hooks/useDashboard';
+
 export default function Dashboard() {
-  const router = useRouter();
-  const [loading, setLoading] = useState(true);
-  const [username, setUsername] = useState('Doctor D');
-  
-  // Scoring & logs
-  const [todayJournal, setTodayJournal] = useState<any>(null);
-  const [streak, setStreak] = useState({ current: 0, longest: 0 });
-  const [habits, setHabits] = useState<any[]>([]);
-  const [weeklyLogs, setWeeklyLogs] = useState<any[]>([]);
-  const [weeklyReviewPending, setWeeklyReviewPending] = useState(false);
-  const [monthlyReviewPending, setMonthlyReviewPending] = useState(false);
-  const [weeklyStats, setWeeklyStats] = useState({ raw: 0, max: 0, pct: 0 });
-  const [monthlyStats, setMonthlyStats] = useState({ pct: 0 });
-  const [datesOfCurrentWeek, setDatesOfCurrentWeek] = useState<string[]>([]);
-  const [habitGridData, setHabitGridData] = useState<{ [date: string]: { [habitId: string]: any } }>({});
-
-  useEffect(() => {
-    async function loadDashboardData() {
-      setLoading(true);
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-          router.push('/login');
-          return;
-        }
-
-        const todayDate = new Date();
-        const todayStr = formatDateString(todayDate);
-        const { week, year } = getISOWeekAndYear(todayDate);
-        const weekDates = getDatesInISOWeek(week, year);
-        setDatesOfCurrentWeek(weekDates);
-        const monthNum = todayDate.getMonth() + 1;
-        const yearNum = todayDate.getFullYear();
-
-        // Fetch all required data in parallel to eliminate database query round-trip latency
-        const [
-          profileResult,
-          habitsResult,
-          todayJournalResult,
-          journalDatesResult,
-          currentWeekJournalsResult,
-          currentMonthJournalsResult,
-          existingReviewResult,
-          existingReportResult,
-        ] = await Promise.all([
-          supabase.from('users').select('*').eq('id', user.id).single(),
-          supabase.from('habits').select('*').eq('user_id', user.id).eq('is_active', true).order('display_order', { ascending: true }),
-          supabase.from('daily_journals').select('*, habit_logs(*)').eq('user_id', user.id).eq('date', todayStr).maybeSingle(),
-          supabase.from('daily_journals').select('date').eq('user_id', user.id),
-          supabase.from('daily_journals').select('*, habit_logs(*)').eq('user_id', user.id).eq('year', year).eq('week_number', week),
-          supabase.from('daily_journals').select('daily_pct_score').eq('user_id', user.id).eq('year', yearNum).eq('month', monthNum),
-          supabase.from('weekly_reviews').select('id').eq('user_id', user.id).eq('year', year).eq('week_number', week).maybeSingle(),
-          supabase.from('monthly_reports').select('id').eq('user_id', user.id).eq('year', yearNum).eq('month', monthNum).maybeSingle(),
-        ]);
-
-        // Process profile
-        const profile = profileResult.data;
-        if (profile) {
-          setUsername(profile.name || 'Doctor D');
-        }
-
-        // Process active habits
-        const habitsList = habitsResult.data || [];
-        setHabits(habitsList);
-
-        // Process today's entry
-        const todayEntry = todayJournalResult.data;
-        setTodayJournal(todayEntry);
-
-        // Process streak
-        const journalDates = journalDatesResult.data;
-        if (journalDates) {
-          const dates = journalDates.map(d => d.date);
-          setStreak(calculateStreak(dates));
-        }
-
-        // Process weekly progress
-        const currentWeekJournals = currentWeekJournalsResult.data;
-        let weekRaw = 0;
-        let weekMax = 0;
-        currentWeekJournals?.forEach((journal) => {
-          weekRaw += parseFloat(journal.daily_raw_score?.toString() || '0');
-          weekMax += parseFloat(journal.daily_max_score?.toString() || '0');
-        });
-        
-        setWeeklyStats({
-          raw: weekRaw,
-          max: weekMax,
-          pct: weekMax > 0 ? Math.round((weekRaw / weekMax) * 100) : 0
-        });
-
-        // Map weekly logs for grid view
-        const grid: typeof habitGridData = {};
-        weekDates.forEach((d) => {
-          grid[d] = {};
-        });
-        currentWeekJournals?.forEach((journal) => {
-          journal.habit_logs?.forEach((log: any) => {
-            grid[journal.date][log.habit_id] = log;
-          });
-        });
-        setHabitGridData(grid);
-
-        // Process monthly progress
-        const currentMonthJournals = currentMonthJournalsResult.data;
-        if (currentMonthJournals && currentMonthJournals.length > 0) {
-          const sum = currentMonthJournals.reduce((acc, curr) => acc + parseFloat(curr.daily_pct_score?.toString() || '0'), 0);
-          setMonthlyStats({
-            pct: Math.round(sum / currentMonthJournals.length)
-          });
-        }
-
-        // Check if Weekly Review is pending
-        // Trigger on Sunday if today's journal is submitted
-        const isSunday = todayDate.getDay() === 0;
-        const todayLogged = todayEntry !== null;
-        if (isSunday && todayLogged) {
-          const existingReview = existingReviewResult.data;
-          if (!existingReview) {
-            setWeeklyReviewPending(true);
-          }
-        }
-
-        // Check if Monthly Review is pending (last 3 days of the month)
-        const totalDays = new Date(yearNum, monthNum, 0).getDate();
-        const currentDay = todayDate.getDate();
-        const isLastThreeDays = currentDay >= totalDays - 2;
-        if (isLastThreeDays) {
-          const existingReport = existingReportResult.data;
-          if (!existingReport) {
-            setMonthlyReviewPending(true);
-          }
-        }
-
-      } catch (err) {
-        console.error('Error loading dashboard:', err);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    loadDashboardData();
-  }, [router]);
+  const {
+    loading,
+    username,
+    todayJournal,
+    streak,
+    habits,
+    weeklyStats,
+    monthlyStats,
+    datesOfCurrentWeek,
+    habitGridData,
+    weeklyComparison,
+    monthlyComparison
+  } = useDashboard();
 
   if (loading) {
     return (
-      <div className="dashboard-loading">
+      <div className="page-loading-container">
         <div className="spinner"></div>
         <p>Loading Dashboard...</p>
-        <style jsx>{`
-          .dashboard-loading {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            padding: 100px 0;
-            color: var(--text-secondary);
-            gap: 12px;
-          }
-          .spinner {
-            width: 32px;
-            height: 32px;
-            border: 3px solid var(--border);
-            border-top: 3px solid var(--primary);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-          }
-          @keyframes spin {
-            to { transform: rotate(360deg); }
-          }
-        `}</style>
       </div>
     );
   }
@@ -202,34 +53,65 @@ export default function Dashboard() {
   const todayRaw = todayJournal ? parseFloat(todayJournal.daily_raw_score?.toString() || '0') : 0;
   const todayMax = todayJournal ? parseFloat(todayJournal.daily_max_score?.toString() || '0') : 0;
 
+  const renderComparisonSummary = (type: 'Weekly' | 'Monthly', comp: any) => {
+    if (!comp) return null;
+    
+    const diff = comp.scoreDiff;
+    const diffText = diff > 0 ? `+${diff.toFixed(1)}%` : `${diff.toFixed(1)}%`;
+    const diffClass = diff > 0 ? 'success' : diff < 0 ? 'danger' : 'neutral';
+    
+    const comparisons: any[] = comp.detailedComparisons || [];
+    
+    const improved = [...comparisons].filter(c => c.status === 'Improved').sort((a, b) => b.pctChange - a.pctChange);
+    const declined = [...comparisons].filter(c => c.status === 'Declined').sort((a, b) => Math.abs(b.pctChange) - Math.abs(a.pctChange));
+    
+    const mostImproved = improved.length > 0 ? improved[0] : null;
+    const needsAttention = declined.length > 0 ? declined[0] : null;
+
+    return (
+      <div className={`dashboard-card comparison-card card-glass animate-scale-in`}>
+        <h4>{type} Overview</h4>
+        <div className="comparison-metrics">
+          <div className="metric-col">
+            <span className="lbl">Overall {type} Score</span>
+            <span className={`val ${diffClass}`}>{comp.currentPct}% ({diffText})</span>
+          </div>
+          <div className="metric-col">
+            <span className="lbl">🌟 Most Improved</span>
+            {mostImproved ? (
+              <span className="val success" style={{ fontSize: '15px' }}>
+                {mostImproved.name} (+{mostImproved.pctChange.toFixed(0)}%)
+              </span>
+            ) : (
+              <span className="val neutral" style={{ fontSize: '15px' }}>—</span>
+            )}
+          </div>
+          <div className="metric-col">
+            <span className="lbl">⚠️ Needs Attention</span>
+            {needsAttention ? (
+              <span className="val danger" style={{ fontSize: '15px' }}>
+                {needsAttention.name} (-{Math.abs(needsAttention.pctChange).toFixed(0)}%)
+              </span>
+            ) : (
+              <span className="val neutral" style={{ fontSize: '15px' }}>—</span>
+            )}
+          </div>
+        </div>
+        
+        <div className="summary-text-box" style={{ marginTop: '16px', padding: '12px', backgroundColor: 'var(--bg-surface)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
+          <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--primary)', marginBottom: '4px', display: 'block' }}>Auto-Generated Summary</span>
+          <p style={{ fontSize: '14px', color: 'var(--text-primary)', lineHeight: 1.5 }}>
+            {comp.summaryText}
+          </p>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="dashboard-container animate-fade-in">
-      {/* Alert banners for reviews */}
-      {weeklyReviewPending && (
-        <div className="alert-banner weekly animate-scale-in">
-          <AlertCircle size={20} className="banner-icon" />
-          <div className="banner-text">
-            <h4>Weekly Reflection Ready!</h4>
-            <p>It&apos;s Sunday. You have logged today&apos;s journal. Take 5 minutes to submit your Weekly Review.</p>
-          </div>
-          <Link href="/weekly" className="btn-banner">
-            Reflect Now <ArrowRight size={14} />
-          </Link>
-        </div>
-      )}
-
-      {monthlyReviewPending && (
-        <div className="alert-banner monthly animate-scale-in">
-          <AlertCircle size={20} className="banner-icon" />
-          <div className="banner-text">
-            <h4>Monthly Report Pending!</h4>
-            <p>The month is ending. Generate your Monthly Report to view long term trends.</p>
-          </div>
-          <Link href="/monthly" className="btn-banner">
-            Generate Report <ArrowRight size={14} />
-          </Link>
-        </div>
-      )}
+      {weeklyComparison && renderComparisonSummary('Weekly', weeklyComparison)}
+      {monthlyComparison && renderComparisonSummary('Monthly', monthlyComparison)}
 
       <div className="welcome-banner">
         <h3>Welcome back, <span className="gradient-text">{username}</span>!</h3>
@@ -406,70 +288,41 @@ export default function Dashboard() {
           gap: 28px;
         }
 
-        .alert-banner {
+        .comparison-card {
+          padding: 20px 24px;
           display: flex;
-          align-items: center;
+          flex-direction: column;
+          gap: 12px;
+          border-left: 4px solid var(--primary);
+        }
+
+        .comparison-metrics {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
           gap: 16px;
-          padding: 16px 24px;
-          border-radius: var(--radius-md);
-          box-shadow: var(--card-shadow);
         }
 
-        .alert-banner.weekly {
-          background-color: var(--primary-light);
-          border: 1px solid rgba(99, 102, 241, 0.2);
-          color: var(--text-primary);
+        .metric-col {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
         }
 
-        .alert-banner.monthly {
-          background-color: var(--accent-light);
-          border: 1px solid rgba(245, 158, 11, 0.2);
-          color: var(--text-primary);
+        .metric-col .lbl {
+          font-size: 12px;
+          color: var(--text-secondary);
+          font-weight: 600;
         }
 
-        .banner-icon {
-          color: var(--primary);
-          flex-shrink: 0;
-        }
-
-        .alert-banner.monthly .banner-icon {
-          color: var(--accent);
-        }
-
-        .banner-text {
-          flex: 1;
-        }
-
-        .banner-text h4 {
-          font-size: 15px;
-          font-weight: 700;
+        .metric-col .val {
+          font-size: 18px;
+          font-weight: 800;
           font-family: 'Outfit', sans-serif;
         }
 
-        .banner-text p {
-          font-size: 12px;
-          color: var(--text-secondary);
-          margin-top: 2px;
-        }
-
-        .btn-banner {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          background-color: var(--bg-surface);
-          border: 1px solid var(--border);
-          padding: 8px 16px;
-          font-size: 12px;
-          font-weight: 700;
-          border-radius: var(--radius-sm);
-          cursor: pointer;
-          transition: all 0.2s;
-        }
-
-        .btn-banner:hover {
-          background-color: var(--bg-elevated);
-          border-color: var(--primary);
-        }
+        .metric-col .val.success { color: var(--success); }
+        .metric-col .val.danger { color: var(--danger); }
+        .metric-col .val.neutral { color: var(--text-primary); }
 
         .welcome-banner h3 {
           font-size: 22px;

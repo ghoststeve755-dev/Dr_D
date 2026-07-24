@@ -6,7 +6,8 @@ import { useState, useEffect } from 'react';
 import { useMonthly } from '@/hooks/useMonthly';
 import { useHabits } from '@/hooks/useHabits';
 import { MonthlyReport } from '@/types';
-import { ChevronDown, ChevronUp, Calendar, Plus, Sparkles, FileSpreadsheet } from 'lucide-react';
+import { ChevronDown, ChevronUp, Calendar, Plus, Sparkles, FileSpreadsheet, Activity } from 'lucide-react';
+import { generateDetailedComparison, generateReadableSummaryText } from '@/lib/summaryGenerator';
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -73,7 +74,7 @@ export default function MonthlyReportsPage() {
       <div className="page-header">
         <div className="header-info">
           <h3>Monthly Reports & Summaries</h3>
-          <p>Generate, review and store monthly roll-ups for study hours, reading, finance, and overall discipline consistency.</p>
+          <p>Monthly stats are automatically generated on the last day of the month based on your daily journals. You can also manually compile them here.</p>
         </div>
 
         <div className="header-actions">
@@ -157,7 +158,7 @@ export default function MonthlyReportsPage() {
           <div className="empty-reports card-glass">
             <Calendar size={36} className="empty-icon" />
             <h4>No Monthly Reports generated yet</h4>
-            <p>Select a month and click &quot;Compile Report&quot; to review your long-term monthly stats.</p>
+            <p>Reports will appear here automatically when you complete a journal on the last day of the month, or you can manually compile one above.</p>
           </div>
         ) : (
           reports.map((report) => {
@@ -172,6 +173,18 @@ export default function MonthlyReportsPage() {
               else if (info.name.includes('Money Spent')) spent = info.totalValue;
             });
             const savings = earned - spent;
+
+            let prevYear = report.year;
+            let prevMonth = report.month - 1;
+            if (prevMonth === 0) {
+              prevYear -= 1;
+              prevMonth = 12;
+            }
+            const prevReport = reports.find(r => r.year === prevYear && r.month === prevMonth);
+            const prevSummary = prevReport?.habit_summary || null;
+            
+            const comparisons = generateDetailedComparison(summary, prevSummary);
+            const summaryText = generateReadableSummaryText('month', report.monthly_pct_score, prevReport ? prevReport.monthly_pct_score : null, comparisons);
 
             return (
               <div key={report.id} className={`report-accordion-card card-glass ${isExpanded ? 'expanded' : ''}`}>
@@ -196,22 +209,64 @@ export default function MonthlyReportsPage() {
 
                 {isExpanded && (
                   <div className="accordion-content animate-fade-in">
-                    <div className="content-grid">
-                      {/* Left: Summary Metrics */}
+                    <div className="auto-summary-box">
+                      <h5><Activity size={16} /> Automated Monthly Summary</h5>
+                      <p>{summaryText}</p>
+                    </div>
+
+                    <div className="content-grid" style={{ marginTop: '20px' }}>
+                      {/* Left: Detailed Comparison */}
                       <div className="monthly-metrics-details">
-                        <h5>📊 Month Summary Stats</h5>
-                        <div className="totals-list" style={{ marginBottom: '16px' }}>
-                          {Object.entries(summary).map(([id, info]: any) => (
-                            <div key={id} className="total-row">
-                              <span className="lbl">{info.name}</span>
-                              <span className="val">
-                                {info.inputType === 'boolean' 
-                                  ? `${info.totalValue} days logged` 
-                                  : `${info.totalValue.toFixed(0)} ${info.unit || ''}`}
-                              </span>
-                            </div>
-                          ))}
+                        <h5>📊 Detailed Performance</h5>
+                        <div className="comparison-table-wrapper" style={{ marginBottom: '16px', overflowX: 'auto' }}>
+                          <table className="comparison-table">
+                            <thead>
+                              <tr>
+                                <th>Metric</th>
+                                <th>Current</th>
+                                <th>Previous</th>
+                                <th>Diff</th>
+                                <th>Status</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {comparisons.map((comp) => {
+                                const valStr = comp.inputType === 'boolean' ? ' days' : (comp.unit ? ` ${comp.unit}` : '');
+                                const isPositive = comp.difference > 0;
+                                const diffStr = comp.difference === 0 ? '-' : `${isPositive ? '+' : ''}${comp.difference}${valStr}`;
+                                const statusClass = comp.status === 'Improved' ? 'success' : comp.status === 'Declined' ? 'danger' : 'neutral';
+                                
+                                return (
+                                  <tr key={comp.habitId}>
+                                    <td className="metric-name">{comp.name}</td>
+                                    <td>{comp.currentValue}{valStr}</td>
+                                    <td>{prevSummary ? `${comp.prevValue}${valStr}` : '—'}</td>
+                                    <td className={statusClass}>{prevSummary ? diffStr : '—'}</td>
+                                    <td>
+                                      {prevSummary && comp.status !== 'No Change' && (
+                                        <span className={`status-badge ${statusClass}`}>{comp.status}</span>
+                                      )}
+                                      {!prevSummary && '—'}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
                         </div>
+                      </div>
+
+                      {/* Right: Actions and visual progress */}
+                      <div className="visual-metrics-details">
+                        <h5>💡 Month Achievements</h5>
+                        <div className="achievement-box">
+                          <Sparkles className="ach-icon" size={16} />
+                          <p>
+                            During {MONTH_NAMES[report.month - 1]} {report.year}, you achieved an overall discipline score of {report.monthly_pct_score}%. 
+                            You registered a net savings of ₹{savings.toLocaleString()} rupees.
+                          </p>
+                        </div>
+
                         <button 
                           onClick={() => window.print()} 
                           className="btn-print-report btn-primary"
@@ -224,23 +279,12 @@ export default function MonthlyReportsPage() {
                             padding: '10px',
                             fontWeight: '600',
                             cursor: 'pointer',
-                            fontSize: '12px'
+                            fontSize: '12px',
+                            marginTop: '20px'
                           }}
                         >
                           <FileSpreadsheet size={16} /> Save / Print PDF
                         </button>
-                      </div>
-
-                      {/* Right: Summary visual progress */}
-                      <div className="visual-metrics-details">
-                        <h5>💡 Month Achievements</h5>
-                        <div className="achievement-box">
-                          <Sparkles className="ach-icon" size={16} />
-                          <p>
-                            During {MONTH_NAMES[report.month - 1]} {report.year}, you achieved an overall discipline score of {report.monthly_pct_score}%. 
-                            You registered a net savings of ₹{savings.toLocaleString()} rupees.
-                          </p>
-                        </div>
                       </div>
                     </div>
                   </div>
@@ -373,6 +417,83 @@ export default function MonthlyReportsPage() {
         .empty-reports p {
           font-size: 13px;
           color: var(--text-secondary);
+        }
+
+        .auto-summary-box {
+          background-color: var(--primary-light);
+          border: 1px solid rgba(99, 102, 241, 0.2);
+          border-radius: var(--radius-md);
+          padding: 16px;
+          margin-bottom: 24px;
+        }
+
+        .auto-summary-box h5 {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          color: var(--primary);
+          font-size: 14px;
+          font-weight: 700;
+          margin-bottom: 8px;
+          font-family: 'Outfit', sans-serif;
+        }
+
+        .auto-summary-box p {
+          font-size: 14px;
+          color: var(--text-primary);
+          line-height: 1.5;
+        }
+
+        .comparison-table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 13px;
+        }
+
+        .comparison-table th {
+          text-align: left;
+          padding: 8px 12px;
+          border-bottom: 1px solid var(--border);
+          color: var(--text-secondary);
+          font-weight: 600;
+        }
+
+        .comparison-table td {
+          padding: 10px 12px;
+          border-bottom: 1px solid var(--border);
+          color: var(--text-primary);
+        }
+
+        .comparison-table .metric-name {
+          font-weight: 600;
+        }
+
+        .comparison-table .success {
+          color: var(--success);
+          font-weight: 600;
+        }
+
+        .comparison-table .danger {
+          color: var(--danger);
+          font-weight: 600;
+        }
+
+        .status-badge {
+          display: inline-block;
+          padding: 4px 8px;
+          border-radius: var(--radius-sm);
+          font-size: 11px;
+          font-weight: 700;
+        }
+
+        .status-badge.success {
+          background-color: var(--success-light);
+          color: var(--success);
+        }
+
+        .status-badge.danger {
+          background-color: var(--danger-light);
+          color: var(--danger);
         }
 
         .report-accordion-card {
